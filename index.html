@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gesture Fireworks</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 45%, rgba(59,130,246,0.12) 0%, rgba(15,23,42,0.10) 28%, rgba(2,6,23,0.35) 52%, #000 100%),
+        linear-gradient(180deg, #020617 0%, #000 100%);
+      font-family: "Microsoft YaHei", sans-serif;
+      color: #fff;
+    }
+
+    #app {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+    }
+
+    video {
+      position: absolute;
+      right: 20px;
+      bottom: 20px;
+      width: 220px;
+      height: 165px;
+      object-fit: cover;
+      border-radius: 16px;
+      opacity: 0.06;
+      transform: scaleX(-1);
+      z-index: 2;
+      pointer-events: none;
+      filter: blur(1px) saturate(0.8);
+    }
+
+    canvas {
+      position: absolute;
+      inset: 0;
+      display: block;
+    }
+
+    #overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(circle at center, rgba(15,23,42,0.18), rgba(0,0,0,0.55));
+      transition: opacity 0.6s ease;
+    }
+
+    #overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .hero {
+      text-align: center;
+      padding: 28px 34px;
+      border-radius: 24px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.10);
+      backdrop-filter: blur(16px);
+      box-shadow:
+        0 20px 60px rgba(0,0,0,0.35),
+        inset 0 1px 0 rgba(255,255,255,0.08);
+      max-width: 680px;
+      margin: 0 20px;
+    }
+
+    .hero h1 {
+      margin: 0 0 14px;
+      font-size: 42px;
+      letter-spacing: 1px;
+      font-weight: 800;
+      background: linear-gradient(90deg, #ffffff, #93c5fd, #f0abfc, #fde68a);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero p {
+      margin: 8px 0;
+      font-size: 16px;
+      line-height: 1.9;
+      color: rgba(255,255,255,0.88);
+    }
+
+    .hero .tip {
+      margin-top: 18px;
+      font-size: 14px;
+      color: rgba(255,255,255,0.68);
+    }
+
+    .pulse {
+      margin: 20px auto 0;
+      width: 78px;
+      height: 78px;
+      border-radius: 50%;
+      position: relative;
+      background: radial-gradient(circle, rgba(255,255,255,0.9) 0%, rgba(96,165,250,0.55) 30%, rgba(168,85,247,0.15) 65%, rgba(255,255,255,0) 100%);
+      box-shadow: 0 0 35px rgba(96,165,250,0.35);
+    }
+
+    .pulse::before,
+    .pulse::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.35);
+      animation: ripple 2.2s infinite ease-out;
+    }
+
+    .pulse::after {
+      animation-delay: 1.1s;
+    }
+
+    @keyframes ripple {
+      0% {
+        transform: scale(0.8);
+        opacity: 0.75;
+      }
+      100% {
+        transform: scale(2.2);
+        opacity: 0;
+      }
+    }
+
+    #cornerHint {
+      position: absolute;
+      left: 20px;
+      bottom: 20px;
+      z-index: 6;
+      padding: 10px 14px;
+      border-radius: 14px;
+      background: rgba(15,23,42,0.38);
+      border: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(10px);
+      color: rgba(255,255,255,0.78);
+      font-size: 13px;
+      line-height: 1.7;
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.5s ease;
+    }
+
+    #cornerHint.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <canvas id="bgCanvas"></canvas>
+    <canvas id="fxCanvas"></canvas>
+    <video id="video" autoplay playsinline muted></video>
+
+    <div id="overlay">
+      <div class="hero">
+        <h1>Gesture Fireworks</h1>
+        <p>点击屏幕开始</p>
+        <p>对着镜头伸出手，食指与拇指捏合即可在指尖释放烟花</p>
+        <div class="pulse"></div>
+        <div class="tip">首次进入需要授权摄像头权限</div>
+      </div>
+    </div>
+
+    <div id="cornerHint">
+      手势已启动<br>
+      食指和拇指捏合可触发烟花
+    </div>
+  </div>
+
+  <script src="./mediapipe/hands.js"></script>
+
+  <script>
+    const video = document.getElementById('video');
+    const bgCanvas = document.getElementById('bgCanvas');
+    const fxCanvas = document.getElementById('fxCanvas');
+    const bgCtx = bgCanvas.getContext('2d');
+    const fxCtx = fxCanvas.getContext('2d');
+    const overlay = document.getElementById('overlay');
+    const cornerHint = document.getElementById('cornerHint');
+    const app = document.getElementById('app');
+
+    let stream = null;
+    let hands = null;
+    let cameraStarted = false;
+    let handsReady = false;
+    let detecting = false;
+    let detectLoopTimer = null;
+    let animationId = null;
+    let started = false;
+
+    let lastPinch = false;
+    let lastBurstTime = 0;
+    let pointerGlow = null;
+    let ambientTime = 0;
+
+    const particles = [];
+    const stars = [];
+    const bursts = [];
+    const trails = [];
+
+    const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+
+    function resize() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+
+      bgCanvas.width = w * DPR;
+      bgCanvas.height = h * DPR;
+      fxCanvas.width = w * DPR;
+      fxCanvas.height = h * DPR;
+
+      bgCanvas.style.width = w + 'px';
+      bgCanvas.style.height = h + 'px';
+      fxCanvas.style.width = w + 'px';
+      fxCanvas.style.height = h + 'px';
+
+      bgCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      fxCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+      createStars();
+    }
+
+    function createStars() {
+      stars.length = 0;
+      const count = Math.floor((window.innerWidth * window.innerHeight) / 9000);
+      for (let i = 0; i < count; i++) {
+        stars.push({
+          x: Math.random() * window.innerWidth,
+          y: Math.random() * window.innerHeight,
+          r: Math.random() * 1.8 + 0.2,
+          a: Math.random() * 0.9 + 0.1,
+          tw: Math.random() * 0.03 + 0.005
+        });
+      }
+    }
+
+    function rand(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    function drawBackground() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      ambientTime += 0.0035;
+
+      bgCtx.clearRect(0, 0, w, h);
+
+      const cx = w * (0.5 + Math.sin(ambientTime * 0.8) * 0.08);
+      const cy = h * (0.42 + Math.cos(ambientTime * 0.6) * 0.04);
+
+      const g = bgCtx.createRadialGradient(cx, cy, 20, cx, cy, Math.max(w, h) * 0.8);
+      g.addColorStop(0, 'rgba(59,130,246,0.16)');
+      g.addColorStop(0.28, 'rgba(168,85,247,0.10)');
+      g.addColorStop(0.55, 'rgba(15,23,42,0.06)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      bgCtx.fillStyle = g;
+      bgCtx.fillRect(0, 0, w, h);
+
+      for (const s of stars) {
+        s.a += (Math.random() - 0.5) * s.tw;
+        if (s.a < 0.12) s.a = 0.12;
+        if (s.a > 1) s.a = 1;
+
+        bgCtx.beginPath();
+        bgCtx.fillStyle = `rgba(255,255,255,${s.a})`;
+        bgCtx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        bgCtx.fill();
+      }
+    }
+
+    function burst(x, y, power = 1) {
+      const colors = [
+        '#ff4d6d', '#ffd166', '#06d6a0', '#4cc9f0',
+        '#f72585', '#b5179e', '#7209b7', '#f77f00',
+        '#80ed99', '#ffffff', '#60a5fa', '#f9a8d4'
+      ];
+
+      bursts.push({
+        x, y,
+        r: 10,
+        life: 18,
+        maxLife: 18,
+        color: colors[(Math.random() * colors.length) | 0]
+      });
+
+      const count = Math.floor(58 * power);
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = rand(1.5, 6.8) * power;
+        const color = colors[(Math.random() * colors.length) | 0];
+
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: rand(42, 82),
+          maxLife: 82,
+          size: rand(1.6, 4.6),
+          color,
+          gravity: rand(0.018, 0.075),
+          drag: rand(0.982, 0.994),
+          sparkle: Math.random() > 0.7,
+          trailEvery: (Math.random() * 3 | 0) + 1,
+          tick: 0
+        });
+      }
+
+      for (let i = 0; i < 12; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = rand(0.8, 2.2);
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: rand(16, 28),
+          maxLife: 28,
+          size: rand(8, 18),
+          color: '#ffffff',
+          gravity: 0,
+          drag: 0.95,
+          glow: true
+        });
+      }
+    }
+
+    function addTrail(x, y, color) {
+      trails.push({
+        x, y,
+        r: rand(1.5, 3.2),
+        life: 12,
+        maxLife: 12,
+        color
+      });
+    }
+
+    function drawBursts() {
+      for (let i = bursts.length - 1; i >= 0; i--) {
+        const b = bursts[i];
+        b.life--;
+        b.r += 4.2;
+
+        const alpha = Math.max(0, b.life / b.maxLife);
+
+        fxCtx.beginPath();
+        fxCtx.strokeStyle = hexToRgba(b.color, alpha * 0.65);
+        fxCtx.lineWidth = 2.2;
+        fxCtx.shadowBlur = 18;
+        fxCtx.shadowColor = b.color;
+        fxCtx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+        fxCtx.stroke();
+
+        if (b.life <= 0) bursts.splice(i, 1);
+      }
+    }
+
+    function drawTrails() {
+      for (let i = trails.length - 1; i >= 0; i--) {
+        const t = trails[i];
+        t.life--;
+        const alpha = Math.max(0, t.life / t.maxLife);
+
+        fxCtx.beginPath();
+        fxCtx.fillStyle = hexToRgba(t.color, alpha * 0.4);
+        fxCtx.shadowBlur = 10;
+        fxCtx.shadowColor = t.color;
+        fxCtx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
+        fxCtx.fill();
+
+        if (t.life <= 0) trails.splice(i, 1);
+      }
+    }
+
+    function updateParticles() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+
+      fxCtx.clearRect(0, 0, w, h);
+      drawTrails();
+      drawBursts();
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.vx *= p.drag;
+        p.vy *= p.drag;
+        p.vy += p.gravity || 0;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        p.tick = (p.tick || 0) + 1;
+
+        if (!p.glow && p.tick % (p.trailEvery || 2) === 0) {
+          addTrail(p.x, p.y, p.color);
+        }
+
+        const alpha = Math.max(0, p.life / p.maxLife);
+        const flicker = p.sparkle ? rand(0.65, 1.2) : 1;
+
+        fxCtx.beginPath();
+        fxCtx.fillStyle = hexToRgba(p.color, alpha * flicker);
+        fxCtx.shadowBlur = p.glow ? 28 : 14;
+        fxCtx.shadowColor = p.color;
+        fxCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        fxCtx.fill();
+
+        if (p.life <= 0 || p.x < -60 || p.x > w + 60 || p.y > h + 60) {
+          particles.splice(i, 1);
+        }
+      }
+
+      drawPointerGlow();
+      fxCtx.shadowBlur = 0;
+    }
+
+    function drawPointerGlow() {
+      if (!pointerGlow) return;
+
+      pointerGlow.life--;
+
+      const alpha = Math.max(0, pointerGlow.life / pointerGlow.maxLife);
+      const pulse = 1 + Math.sin(performance.now() * 0.02) * 0.08;
+
+      fxCtx.beginPath();
+      fxCtx.strokeStyle = `rgba(255,255,255,${alpha * 0.9})`;
+      fxCtx.lineWidth = 2;
+      fxCtx.shadowBlur = 20;
+      fxCtx.shadowColor = '#60a5fa';
+      fxCtx.arc(pointerGlow.x, pointerGlow.y, 18 * pulse, 0, Math.PI * 2);
+      fxCtx.stroke();
+
+      fxCtx.beginPath();
+      fxCtx.fillStyle = `rgba(255,255,255,${alpha})`;
+      fxCtx.shadowBlur = 24;
+      fxCtx.shadowColor = '#ffffff';
+      fxCtx.arc(pointerGlow.x, pointerGlow.y, 4.5, 0, Math.PI * 2);
+      fxCtx.fill();
+
+      if (pointerGlow.life <= 0) pointerGlow = null;
+    }
+
+    function hexToRgba(hex, alpha) {
+      const c = hex.replace('#', '');
+      const bigint = parseInt(c, 16);
+      let r = 255, g = 255, b = 255;
+
+      if (c.length === 6) {
+        r = (bigint >> 16) & 255;
+        g = (bigint >> 8) & 255;
+        b = bigint & 255;
+      }
+
+      return `rgba(${r},${g},${b},${alpha})`;
+    }
+
+    function animate() {
+      drawBackground();
+      updateParticles();
+      animationId = requestAnimationFrame(animate);
+    }
+
+    async function startCamera() {
+      if (stream) return;
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('当前浏览器不支持摄像头调用');
+      }
+
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 960 },
+          height: { ideal: 720 },
+          facingMode: 'user'
+        },
+        audio: false
+      });
+
+      video.srcObject = stream;
+      await video.play();
+      cameraStarted = true;
+    }
+
+    async function ensureHands() {
+      if (handsReady && hands) return hands;
+
+      if (location.protocol === 'file:') {
+        throw new Error('请通过 localhost 或 http 服务打开页面');
+      }
+
+      if (typeof Hands === 'undefined') {
+        throw new Error('未找到 ./mediapipe/hands.js');
+      }
+
+      hands = new Hands({
+        locateFile: (file) => `./mediapipe/${file}`
+      });
+
+      hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.55
+      });
+
+      hands.onResults(onHandsResults);
+      handsReady = true;
+
+      return hands;
+    }
+
+    function onHandsResults(results) {
+      if (!results || !results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+        lastPinch = false;
+        pointerGlow = null;
+        return;
+      }
+
+      const landmarks = results.multiHandLandmarks[0];
+      const thumbTip = landmarks[4];
+      const indexTip = landmarks[8];
+
+      const dx = thumbTip.x - indexTip.x;
+      const dy = thumbTip.y - indexTip.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      const pinch = dist < 0.055;
+
+      const x = (1 - indexTip.x) * window.innerWidth;
+      const y = indexTip.y * window.innerHeight;
+
+      pointerGlow = {
+        x, y,
+        life: 6,
+        maxLife: 6
+      };
+
+      const now = performance.now();
+
+      if (pinch) {
+        if (!lastPinch || now - lastBurstTime > 110) {
+          burst(x, y, lastPinch ? 0.78 : 1.22);
+          lastBurstTime = now;
+        }
+      }
+
+      lastPinch = pinch;
+    }
+
+    async function startHandsDetect() {
+      if (!cameraStarted) throw new Error('摄像头未启动');
+      if (detecting) return;
+
+      await ensureHands();
+      detecting = true;
+
+      const loop = async () => {
+        if (!detecting) return;
+
+        try {
+          if (video.readyState >= 2 && hands) {
+            await hands.send({ image: video });
+          }
+        } catch (err) {
+          console.error(err);
+          detecting = false;
+          return;
+        }
+
+        detectLoopTimer = setTimeout(loop, 33);
+      };
+
+      loop();
+    }
+
+    async function boot() {
+      if (started) return;
+      started = true;
+
+      try {
+        await startCamera();
+        await startHandsDetect();
+        overlay.classList.add('hidden');
+        cornerHint.classList.add('show');
+      } catch (err) {
+        started = false;
+        alert(err.message || String(err));
+      }
+    }
+
+    function stopAll() {
+      detecting = false;
+
+      if (detectLoopTimer) {
+        clearTimeout(detectLoopTimer);
+        detectLoopTimer = null;
+      }
+
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+
+      video.srcObject = null;
+      cameraStarted = false;
+      lastPinch = false;
+      pointerGlow = null;
+      started = false;
+      overlay.classList.remove('hidden');
+      cornerHint.classList.remove('show');
+    }
+
+    app.addEventListener('click', boot);
+    window.addEventListener('resize', resize);
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') stopAll();
+    });
+
+    window.addEventListener('load', () => {
+      resize();
+      animate();
+    });
+  </script>
+</body>
+</html>
